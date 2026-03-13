@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import textwrap
 from pathlib import Path
 
@@ -50,57 +51,81 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-MAX_TEXT_LENGTH = 1500          # Characters — reject anything longer than this
-IMAGE_WIDTH = 1000              # Fixed canvas width in pixels
-PADDING = 60                    # Horizontal & vertical padding in pixels
+MAX_TEXT_LENGTH = 1500
+IMAGE_WIDTH = 1000
+PADDING = 60
 WATERMARK = "Lim Sovannrady"
 
-# Soft pastel / light-gray background colours to cycle through per message
 BACKGROUNDS: list[tuple[int, int, int]] = [
-    (245, 245, 248),   # near-white gray
-    (240, 245, 255),   # pale sky blue
-    (245, 255, 245),   # pale mint
-    (255, 248, 240),   # pale warm peach
-    (248, 240, 255),   # pale lavender
+    (245, 245, 248),
+    (240, 245, 255),
+    (245, 255, 245),
+    (255, 248, 240),
+    (248, 240, 255),
 ]
 
-TEXT_COLOR = (30, 30, 30)         # Very dark gray (almost black)
-ACCENT_COLOR = (100, 120, 200)    # Soft indigo for the header bar
-WATERMARK_COLOR = (160, 160, 170) # Muted gray
+TEXT_COLOR      = (30, 30, 30)
+ACCENT_COLOR    = (100, 120, 200)
+WATERMARK_COLOR = (160, 160, 170)
+
+# ── Emoji detection ───────────────────────────────────────────────────────────
+
+# Unicode ranges that are emoji / emoji-like
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"   # Misc symbols, emoticons, transport, flags…
+    "\U00002600-\U000027BF"   # Misc symbols, dingbats
+    "\U0000FE00-\U0000FE0F"   # Variation selectors
+    "\U0001F900-\U0001F9FF"   # Supplemental symbols and pictographs
+    "\U00002300-\U000023FF"   # Misc technical
+    "\U00002B00-\U00002BFF"   # Misc symbols & arrows
+    "\U00003000-\U00003300"   # CJK symbols (some overlap)
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _segment(text: str) -> list[tuple[str, bool]]:
+    """
+    Split *text* into (chunk, is_emoji) pairs so each chunk can be rendered
+    with the appropriate font.
+    """
+    segments: list[tuple[str, bool]] = []
+    pos = 0
+    for m in _EMOJI_RE.finditer(text):
+        if m.start() > pos:
+            segments.append((text[pos : m.start()], False))
+        segments.append((m.group(), True))
+        pos = m.end()
+    if pos < len(text):
+        segments.append((text[pos:], False))
+    return segments or [("", False)]
 
 
 # ── Font helpers ──────────────────────────────────────────────────────────────
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Try common system fonts; fall back to the built-in bitmap font.
+_here = Path(__file__).parent
 
-    Priority order:
-    1. Bundled fonts/ directory (Noto Sans Khmer — supports Latin + Khmer + many scripts)
-    2. Common system paths
-    3. PIL built-in bitmap font (last resort)
+
+def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """
-    # Resolve bundled fonts directory relative to this script
-    _here = Path(__file__).parent
+    Load the main text font.
+    Priority: bundled NotoSansKhmer → system Noto → DejaVu → fallback.
+    """
     candidates = [
-        # ── Bundled fonts (highest priority — Khmer + Latin support) ─────────
         str(_here / "fonts" / "NotoSansKhmer.ttf"),
         str(_here / "fonts" / "NotoSans-Regular.ttf"),
-        # ── System Noto fonts ─────────────────────────────────────────────────
         "/usr/share/fonts/noto/NotoSansKhmer-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf",
         "/usr/share/fonts/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        # ── DejaVu (available on most Linux/NixOS systems) ────────────────────
         "/run/current-system/sw/share/X11/fonts/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        # ── Liberation / FreeSans ─────────────────────────────────────────────
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        # ── macOS ─────────────────────────────────────────────────────────────
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Arial.ttf",
-        # ── Windows ───────────────────────────────────────────────────────────
         "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/calibri.ttf",
     ]
@@ -110,8 +135,63 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
                 return ImageFont.truetype(path, size)
             except Exception:
                 continue
-    # Ultimate fallback — PIL built-in bitmap font (no size argument)
     return ImageFont.load_default()
+
+
+def _load_emoji_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Load the emoji font (NotoEmoji). Falls back to the main font."""
+    candidates = [
+        str(_here / "fonts" / "NotoEmoji.ttf"),
+        "/usr/share/fonts/noto/NotoEmoji-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
+    ]
+    for path in candidates:
+        if Path(path).exists():
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    return _load_font(size)
+
+
+# ── Multi-font text measurement ───────────────────────────────────────────────
+
+def _measure_line(
+    line: str,
+    font_main: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    font_emoji: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    dummy_draw: ImageDraw.ImageDraw,
+) -> tuple[int, int]:
+    """Return (width, height) of a single line using per-segment fonts."""
+    total_w = 0
+    max_h = 0
+    for chunk, is_emoji in _segment(line):
+        if not chunk:
+            continue
+        font = font_emoji if is_emoji else font_main
+        try:
+            bbox = dummy_draw.textbbox((0, 0), chunk, font=font)
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+        except Exception:
+            w = len(chunk) * (font_main.size if hasattr(font_main, "size") else 20)  # type: ignore[attr-defined]
+            h = font_main.size if hasattr(font_main, "size") else 20               # type: ignore[attr-defined]
+        total_w += w
+        max_h = max(max_h, h)
+    return total_w, max_h
+
+
+# ── Font-size / wrapping selection ────────────────────────────────────────────
+
+def _wrap_lines(text: str, chars_per_line: int) -> list[str]:
+    """Wrap each paragraph independently, preserving blank lines."""
+    wrapped: list[str] = []
+    for paragraph in text.splitlines():
+        if paragraph.strip() == "":
+            wrapped.append("")
+        else:
+            wrapped.extend(textwrap.wrap(paragraph, width=chars_per_line) or [""])
+    return wrapped
 
 
 def _font_size_for_text(
@@ -123,120 +203,142 @@ def _font_size_for_text(
 ) -> tuple[int, list[str]]:
     """
     Binary-search for the largest font size where the wrapped text fits inside
-    (max_width × max_height).  Returns (chosen_size, wrapped_lines).
+    (max_width × max_height). Returns (chosen_size, wrapped_lines).
     """
+    dummy_img = Image.new("RGB", (1, 1))
+    dummy_draw = ImageDraw.Draw(dummy_img)
+
     best_size = min_size
     best_lines: list[str] = text.splitlines() or [""]
 
     for size in range(max_size, min_size - 1, -2):
-        font = _load_font(size)
-        # Estimate characters per line from font metrics
-        try:
-            bbox = font.getbbox("A")
-            char_w = max(bbox[2] - bbox[0], 1)
-        except AttributeError:
-            char_w = size // 2
+        font_main = _load_font(size)
+        font_emoji = _load_emoji_font(size)
 
+        # Estimate chars per line
+        try:
+            bbox = dummy_draw.textbbox((0, 0), "ក", font=font_main)
+            char_w = max(bbox[2] - bbox[0], 1)
+        except Exception:
+            char_w = size // 2
         chars_per_line = max(int(max_width / char_w), 10)
 
-        # Wrap each paragraph independently, preserving blank lines
-        wrapped: list[str] = []
-        for paragraph in text.splitlines():
-            if paragraph.strip() == "":
-                wrapped.append("")
-            else:
-                wrapped.extend(
-                    textwrap.wrap(paragraph, width=chars_per_line) or [""]
-                )
+        lines = _wrap_lines(text, chars_per_line)
 
-        # Measure actual rendered height
-        dummy = Image.new("RGB", (1, 1))
-        draw = ImageDraw.Draw(dummy)
-        try:
-            bbox = draw.textbbox((0, 0), "\n".join(wrapped), font=font)
-            total_h = bbox[3] - bbox[1]
-        except AttributeError:
-            total_h = len(wrapped) * (size + 4)
+        line_spacing = int(size * 0.35)
+        total_h = 0
+        for line in lines:
+            _, lh = _measure_line(line, font_main, font_emoji, dummy_draw)
+            total_h += max(lh, size) + line_spacing
 
         if total_h <= max_height:
             best_size = size
-            best_lines = wrapped
+            best_lines = lines
             break
 
     return best_size, best_lines
 
 
+# ── Multi-font line drawing ───────────────────────────────────────────────────
+
+def _draw_line(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    line: str,
+    font_main: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    font_emoji: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    fill: tuple[int, int, int],
+    shadow: bool = False,
+    shadow_draw: ImageDraw.ImageDraw | None = None,
+) -> int:
+    """
+    Draw a single line with per-segment fonts.
+    Returns the line height (px).
+    """
+    cur_x = x
+    line_h = 0
+    segments = _segment(line)
+
+    for chunk, is_emoji in segments:
+        if not chunk:
+            continue
+        font = font_emoji if is_emoji else font_main
+        try:
+            bbox = draw.textbbox((cur_x, y), chunk, font=font)
+            w = bbox[2] - bbox[0]
+            h = bbox[3] - bbox[1]
+        except Exception:
+            sz = font_main.size if hasattr(font_main, "size") else 20  # type: ignore[attr-defined]
+            w = len(chunk) * sz // 2
+            h = sz
+        if shadow and shadow_draw:
+            shadow_draw.text((cur_x + 3, y + 3), chunk, font=font, fill=(0, 0, 0, 60))
+        draw.text((cur_x, y), chunk, font=font, fill=fill)
+        cur_x += w
+        line_h = max(line_h, h)
+
+    return line_h
+
+
 # ── Image generation ──────────────────────────────────────────────────────────
 
 def _pick_background(text: str) -> tuple[int, int, int]:
-    """Deterministically pick a background colour based on text content."""
     return BACKGROUNDS[sum(ord(c) for c in text) % len(BACKGROUNDS)]
 
 
 def generate_image(text: str) -> bytes:
     """
     Render *text* onto a clean image and return the PNG as raw bytes.
-
-    Layout
-    ------
-    - Fixed 1000-px-wide canvas, height adapts to content
-    - Soft pastel background
-    - Accent bar at the top
-    - Main text centred horizontally, with generous padding
-    - Subtle drop-shadow on the text block
-    - Small watermark in the bottom-right corner
+    Supports Khmer, Latin, emoji, and mixed scripts.
     """
     bg_color = _pick_background(text)
     content_width = IMAGE_WIDTH - 2 * PADDING
 
-    # ── Work out font size and wrapped lines ─────────────────────────────────
-    # Temporarily assume a tall canvas so we can measure freely
     font_size, lines = _font_size_for_text(
         text,
         max_width=content_width,
         max_height=2000,
     )
-    font_main = _load_font(font_size)
-    font_watermark = _load_font(max(14, font_size // 3))
+    font_main  = _load_font(font_size)
+    font_emoji = _load_emoji_font(font_size)
+    font_wm    = _load_font(max(14, font_size // 3))
 
     line_spacing = int(font_size * 0.35)
-    line_height = font_size + line_spacing
 
     # ── Calculate canvas height ───────────────────────────────────────────────
     header_bar_h = 8
-    top_pad = PADDING + header_bar_h + 20
-    bottom_pad = PADDING + 30   # room for watermark
+    top_pad      = PADDING + header_bar_h + 20
+    bottom_pad   = PADDING + 30
 
-    text_block_h = len(lines) * line_height
+    dummy_img  = Image.new("RGB", (1, 1))
+    dummy_draw = ImageDraw.Draw(dummy_img)
+
+    text_block_h = sum(
+        max(_measure_line(l, font_main, font_emoji, dummy_draw)[1], font_size) + line_spacing
+        for l in lines
+    )
     canvas_h = max(top_pad + text_block_h + bottom_pad, 200)
 
-    # ── Draw background ───────────────────────────────────────────────────────
-    img = Image.new("RGB", (IMAGE_WIDTH, canvas_h), color=bg_color)
+    # ── Background ────────────────────────────────────────────────────────────
+    img  = Image.new("RGB", (IMAGE_WIDTH, canvas_h), color=bg_color)
     draw = ImageDraw.Draw(img)
+    draw.rectangle([(0, 0), (IMAGE_WIDTH, header_bar_h)], fill=ACCENT_COLOR)
 
-    # Accent bar at top
-    draw.rectangle(
-        [(0, 0), (IMAGE_WIDTH, header_bar_h)],
-        fill=ACCENT_COLOR,
-    )
-
-    # ── Drop-shadow layer ─────────────────────────────────────────────────────
+    # ── Shadow layer ──────────────────────────────────────────────────────────
     shadow_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    shadow_draw = ImageDraw.Draw(shadow_layer)
+    shadow_draw  = ImageDraw.Draw(shadow_layer)
 
-    text_x = PADDING
-    text_y = top_pad
-    joined = "\n".join(lines)
+    cur_y = top_pad
+    for line in lines:
+        _draw_line(
+            shadow_draw, PADDING, cur_y + 3, line,
+            font_main, font_emoji,
+            fill=(0, 0, 0, 60),
+        )
+        lh = max(_measure_line(line, font_main, font_emoji, dummy_draw)[1], font_size)
+        cur_y += lh + line_spacing
 
-    # Draw shadow slightly offset
-    shadow_draw.text(
-        (text_x + 3, text_y + 3),
-        joined,
-        font=font_main,
-        fill=(0, 0, 0, 60),
-        spacing=line_spacing,
-    )
-    # Blur the shadow
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=4))
     img = img.convert("RGBA")
     img = Image.alpha_composite(img, shadow_layer)
@@ -244,36 +346,29 @@ def generate_image(text: str) -> bytes:
     draw = ImageDraw.Draw(img)
 
     # ── Main text ─────────────────────────────────────────────────────────────
-    draw.text(
-        (text_x, text_y),
-        joined,
-        font=font_main,
-        fill=TEXT_COLOR,
-        spacing=line_spacing,
-    )
+    cur_y = top_pad
+    for line in lines:
+        _draw_line(draw, PADDING, cur_y, line, font_main, font_emoji, fill=TEXT_COLOR)
+        lh = max(_measure_line(line, font_main, font_emoji, dummy_draw)[1], font_size)
+        cur_y += lh + line_spacing
 
     # ── Watermark ─────────────────────────────────────────────────────────────
     try:
-        wm_bbox = draw.textbbox((0, 0), WATERMARK, font=font_watermark)
+        wm_bbox = draw.textbbox((0, 0), WATERMARK, font=font_wm)
         wm_w = wm_bbox[2] - wm_bbox[0]
         wm_h = wm_bbox[3] - wm_bbox[1]
-    except AttributeError:
+    except Exception:
         wm_w = len(WATERMARK) * (font_size // 3)
         wm_h = font_size // 3
-
-    wm_x = IMAGE_WIDTH - PADDING // 2 - wm_w
-    wm_y = canvas_h - wm_h - 14
-    draw.text((wm_x, wm_y), WATERMARK, font=font_watermark, fill=WATERMARK_COLOR)
-
-    # ── Thin border ───────────────────────────────────────────────────────────
-    border_color = tuple(max(c - 15, 0) for c in bg_color)
-    draw.rectangle(
-        [(0, 0), (IMAGE_WIDTH - 1, canvas_h - 1)],
-        outline=border_color,
-        width=2,
+    draw.text(
+        (IMAGE_WIDTH - PADDING // 2 - wm_w, canvas_h - wm_h - 14),
+        WATERMARK, font=font_wm, fill=WATERMARK_COLOR,
     )
 
-    # ── Encode as PNG ─────────────────────────────────────────────────────────
+    # ── Border ────────────────────────────────────────────────────────────────
+    border_color = tuple(max(c - 15, 0) for c in bg_color)
+    draw.rectangle([(0, 0), (IMAGE_WIDTH - 1, canvas_h - 1)], outline=border_color, width=2)
+
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     buf.seek(0)
@@ -283,7 +378,6 @@ def generate_image(text: str) -> bytes:
 # ── Command handlers ──────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the /start command."""
     await update.message.reply_text(
         "👋 *Welcome to the Text → Image Bot!*\n\n"
         "Send me any text and I'll turn it into a beautiful image for you.\n\n"
@@ -293,7 +387,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the /help command."""
     await update.message.reply_text(
         "📖 *How to use this bot*\n\n"
         "1. Simply send any text message.\n"
@@ -301,6 +394,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "*Tips:*\n"
         "• Use line breaks (Enter key) to split into paragraphs.\n"
         "• Long text is automatically wrapped and resized to fit.\n"
+        "• Emojis, Khmer, and Latin text are all supported.\n"
         f"• Maximum length: {MAX_TEXT_LENGTH} characters.\n\n"
         "*Commands:*\n"
         "/start — welcome message\n"
@@ -310,18 +404,15 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Convert incoming text to an image and send it back."""
     message = update.message
     text: str = (message.text or "").strip()
 
-    # ── Guard: empty text ─────────────────────────────────────────────────────
     if not text:
         await message.reply_text(
             "Please send some text and I'll turn it into an image."
         )
         return
 
-    # ── Guard: text too long ──────────────────────────────────────────────────
     if len(text) > MAX_TEXT_LENGTH:
         await message.reply_text(
             f"⚠️ Your message is too long ({len(text)} chars).\n"
@@ -335,12 +426,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         len(text),
     )
 
-    # ── Show "uploading photo…" action indicator ──────────────────────────────
-    await context.bot.send_chat_action(
-        chat_id=message.chat_id, action="upload_photo"
-    )
+    await context.bot.send_chat_action(chat_id=message.chat_id, action="upload_photo")
 
-    # ── Generate and send ─────────────────────────────────────────────────────
     try:
         image_bytes = generate_image(text)
         buf = io.BytesIO(image_bytes)
@@ -364,17 +451,10 @@ def main() -> None:
             "or export it:  export BOT_TOKEN=<your_token>"
         )
 
-    app = (
-        Application.builder()
-        .token(token)
-        .build()
-    )
-
+    app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
-    )
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     logger.info("Bot is starting — polling for updates …")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

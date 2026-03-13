@@ -91,6 +91,30 @@ Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used b
 
 Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
 
+## Telegram Bot (bot.py)
+
+Standalone Python bot at the workspace root that converts text → images and sends them back as photos.
+
+### Stack
+- **python-telegram-bot** v21+ (async polling)
+- **ImageMagick 7** (`magick` CLI) with **Pango + HarfBuzz** for text rendering — handles Khmer, Latin, emoji, and all complex scripts correctly
+- **Pillow** for image composition (background, accent bar, drop shadow, border, watermark)
+- **Fonts**: `fonts/NotoSansKhmer.ttf` (static, wght=400) + `fonts/NotoEmoji.ttf`, auto-registered in `~/.fonts` via `fc-cache` at startup
+- **Watermark**: "Lim Sovannrady" (bottom-right, subtle grey)
+- **Image dimensions**: 1000 × variable px, 60px padding
+
+### How it works
+1. `_setup_fonts()` copies bundled fonts to `~/.fonts` and runs `fc-cache` once at startup
+2. `_pango_render_text()` calls `magick pango:<markup>` to render text as a transparent RGBA PNG
+3. `generate_image()` composites: pastel background → accent bar → drop shadow → text layer → watermark → border
+4. Bot sends the PNG back as a photo
+
+### Config
+- `BOT_TOKEN` secret (Replit secret or `.env` file)
+- Workflow: `Start Telegram Bot` → `python3 bot.py`
+
+---
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.

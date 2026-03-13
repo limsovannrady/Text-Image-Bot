@@ -72,22 +72,35 @@ WATERMARK_COLOR = (160, 160, 170) # Muted gray
 # ── Font helpers ──────────────────────────────────────────────────────────────
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Try common system fonts; fall back to the built-in bitmap font."""
+    """Try common system fonts; fall back to the built-in bitmap font.
+
+    Priority order:
+    1. Bundled fonts/ directory (Noto Sans Khmer — supports Latin + Khmer + many scripts)
+    2. Common system paths
+    3. PIL built-in bitmap font (last resort)
+    """
+    # Resolve bundled fonts directory relative to this script
+    _here = Path(__file__).parent
     candidates = [
-        # DejaVu (available on most Linux/NixOS systems)
+        # ── Bundled fonts (highest priority — Khmer + Latin support) ─────────
+        str(_here / "fonts" / "NotoSansKhmer.ttf"),
+        str(_here / "fonts" / "NotoSans-Regular.ttf"),
+        # ── System Noto fonts ─────────────────────────────────────────────────
+        "/usr/share/fonts/noto/NotoSansKhmer-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        # ── DejaVu (available on most Linux/NixOS systems) ────────────────────
         "/run/current-system/sw/share/X11/fonts/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        # Noto (good Unicode + emoji coverage)
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        # Liberation / FreeSans
+        # ── Liberation / FreeSans ─────────────────────────────────────────────
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        # macOS
+        # ── macOS ─────────────────────────────────────────────────────────────
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Arial.ttf",
-        # Windows
+        # ── Windows ───────────────────────────────────────────────────────────
         "C:/Windows/Fonts/arial.ttf",
         "C:/Windows/Fonts/calibri.ttf",
     ]

@@ -128,6 +128,13 @@ def _pango_render_text(
         tmp_path = tmp.name
 
     try:
+        # Prepare environment with proper font paths
+        env = {
+            **os.environ,
+            "HOME": str(Path.home()),
+            "FONTCONFIG_PATH": "/etc/fonts",
+        }
+        
         cmd = [
             "magick",
             "-size", f"{max_width_px}x",
@@ -137,12 +144,20 @@ def _pango_render_text(
             "+repage",
             tmp_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env={**os.environ, "HOME": str(Path.home())})
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env=env)
         if result.returncode != 0:
-            logger.error("magick pango error (rc=%d): stderr=%s stdout=%s", result.returncode, result.stderr, result.stdout)
-            raise RuntimeError(f"ImageMagick pango failed (rc {result.returncode}): {result.stderr[:200]}")
+            logger.error(
+                "magick pango error (rc=%d): stderr=%s stdout=%s cmd=%s",
+                result.returncode, result.stderr[:300], result.stdout[:300], " ".join(cmd)
+            )
+            raise RuntimeError(f"ImageMagick failed (rc {result.returncode}): {result.stderr[:200]}")
+        
+        if not Path(tmp_path).exists():
+            logger.error("magick did not create output file at %s", tmp_path)
+            raise RuntimeError("ImageMagick did not produce output file")
+            
         img = Image.open(tmp_path).convert("RGBA")
-        logger.debug("pango rendered text: %s → %sx%s", text[:30], img.width, img.height)
+        logger.info("pango rendered text (%d chars): %sx%s px", len(text), img.width, img.height)
         return img
     finally:
         Path(tmp_path).unlink(missing_ok=True)

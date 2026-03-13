@@ -18,13 +18,12 @@ RUN sed -i 's|<policy domain="coder" rights="none" pattern="PDF" />||' /etc/Imag
 # Create app directory
 WORKDIR /app
 
-# Copy fonts into the container
-COPY fonts/ /app/fonts/
+# Copy fonts into the container - system location for best compatibility
+COPY fonts/ /usr/local/share/fonts/noto/
+RUN fc-cache -fv /usr/local/share/fonts/
 
-# Register fonts at build time
-RUN mkdir -p /home/app/.fonts && \
-    cp /app/fonts/*.ttf /home/app/.fonts/ && \
-    fc-cache -fv /home/app/.fonts
+# Also copy to app directory for backup
+COPY fonts/ /app/fonts/
 
 # Install Python dependencies
 COPY requirements.txt .
@@ -35,12 +34,14 @@ COPY bot.py .
 
 # Create non-root user for security
 RUN useradd -m -u 1000 app && \
-    chown -R app:app /app /home/app
+    chown -R app:app /app && \
+    chmod 755 /usr/local/share/fonts /usr/local/share/fonts/noto
 USER app
 
-# Set HOME so fontconfig can be found
+# Set HOME and fontconfig env for font discovery
 ENV HOME=/home/app \
-    XDG_DATA_HOME=/home/app/.local/share
+    XDG_DATA_HOME=/home/app/.local/share \
+    FONTCONFIG_PATH=/etc/fonts
 
 # Health check: bot should be running and responding to signals
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=1 \

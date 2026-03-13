@@ -44,6 +44,22 @@ Thumbs.db
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Environment secrets
+.env
+
 # Replit
 .cache/
 .local/

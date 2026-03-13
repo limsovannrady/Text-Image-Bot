@@ -113,6 +113,33 @@ Standalone Python bot at the workspace root that converts text → images and se
 - `BOT_TOKEN` secret (Replit secret or `.env` file)
 - Workflow: `Start Telegram Bot` → `python3 bot.py`
 
+### Docker / Production Deployment
+The bot is containerized and ready for deployment to Render, Railway, Fly.io, or any Docker-compatible platform.
+
+**Files:**
+- `Dockerfile` — multi-stage build (Python 3.11-slim + ImageMagick + Pango + fonts)
+- `requirements.txt` — Python dependencies
+- `.dockerignore` — excludes unnecessary files from the image
+
+**Build:**
+```bash
+docker build -t telegram-bot:latest .
+```
+
+**Run locally (with BOT_TOKEN set):**
+```bash
+docker run --env BOT_TOKEN="your_token" telegram-bot:latest
+```
+
+**Deploy to Render (or similar):**
+1. Push the repo to GitHub
+2. Create a new "Web Service" on Render pointing to your GitHub repo
+3. Set environment variable: `BOT_TOKEN` = your Telegram token
+4. Render auto-detects the Dockerfile and deploys
+5. Logs available in the Render dashboard
+
+See `DEPLOY.md` for detailed deployment steps.
+
 ---
 
 ### `scripts` (`@workspace/scripts`)

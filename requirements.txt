@@ -1,0 +1,4 @@
+python-telegram-bot[all]==22.6
+Pillow>=10.0.0
+python-dotenv==1.2.2
+Wand>=0.7.0

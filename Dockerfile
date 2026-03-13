@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Relax ImageMagick security policy to allow PDF/delegate commands
-RUN sed -i 's/<policy domain="coder" rights="none" pattern="PDF" \/>//' /etc/ImageMagick-6/policy.xml
+# Relax ImageMagick security policy (use pipe delimiter to avoid conflicts)
+RUN sed -i 's|<policy domain="coder" rights="none" pattern="PDF" />||' /etc/ImageMagick-6/policy.xml || true
 
 # Create app directory
 WORKDIR /app

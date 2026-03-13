@@ -137,11 +137,13 @@ def _pango_render_text(
             "+repage",
             tmp_path,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, env={**os.environ, "HOME": str(Path.home())})
         if result.returncode != 0:
-            logger.error("magick pango error: %s", result.stderr)
-            raise RuntimeError(f"ImageMagick pango failed: {result.stderr}")
-        return Image.open(tmp_path).convert("RGBA")
+            logger.error("magick pango error (rc=%d): stderr=%s stdout=%s", result.returncode, result.stderr, result.stdout)
+            raise RuntimeError(f"ImageMagick pango failed (rc {result.returncode}): {result.stderr[:200]}")
+        img = Image.open(tmp_path).convert("RGBA")
+        logger.debug("pango rendered text: %s → %sx%s", text[:30], img.width, img.height)
+        return img
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
@@ -309,6 +311,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         buf = io.BytesIO(image_bytes)
         buf.name = "image.png"
         await message.reply_photo(photo=buf)
+        logger.info("Image sent successfully")
+    except subprocess.TimeoutExpired:
+        logger.exception("ImageMagick timeout (too much text or system slow)")
+        await message.reply_text(
+            "⏱️ Image rendering took too long. Try a shorter text."
+        )
+    except FileNotFoundError as e:
+        logger.exception("Missing resource: %s", e)
+        await message.reply_text(
+            "❌ System error: missing resource. Contact admin."
+        )
     except Exception as exc:
         logger.exception("Image generation failed: %s", exc)
         await message.reply_text(

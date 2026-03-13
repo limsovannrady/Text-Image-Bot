@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 MAX_TEXT_LENGTH = 1500          # Characters — reject anything longer than this
 IMAGE_WIDTH = 1000              # Fixed canvas width in pixels
 PADDING = 60                    # Horizontal & vertical padding in pixels
-WATERMARK = "Made with Telegram Text→Image Bot"
+WATERMARK = "Lim Sovannrady"
 
 # Soft pastel / light-gray background colours to cycle through per message
 BACKGROUNDS: list[tuple[int, int, int]] = [
